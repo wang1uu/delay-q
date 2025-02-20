@@ -1,5 +1,6 @@
 package cc.wang1.component.redis;
 
+import org.springframework.data.redis.connection.RedisListCommands;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.serializer.GenericToStringSerializer;
@@ -9,12 +10,13 @@ import org.springframework.stereotype.Component;
 import javax.annotation.Resource;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Redis 客户端适配器
  * @author wang1
  */
-@Component
+@Component(value = "stringRedisClient")
 public class SpringStringRedisClientAdapter implements RedisClient<String> {
 
     @Resource(name = "delayQueueStringRedisClient")
@@ -80,6 +82,11 @@ public class SpringStringRedisClientAdapter implements RedisClient<String> {
     }
 
     @Override
+    public String bLMove(String source, String destination, long timeout, TimeUnit unit) {
+        return redisTemplate.opsForList().move(source, RedisListCommands.Direction.LEFT, destination, RedisListCommands.Direction.RIGHT, timeout, unit);
+    }
+
+    @Override
     public long executeTransferScript(String script, List<String> keys, List<Long> args) {
         return redisTemplate.execute(new DefaultRedisScript<>(script, Long.class),
                 new GenericToStringSerializer<>(Long.class),
@@ -107,17 +114,10 @@ public class SpringStringRedisClientAdapter implements RedisClient<String> {
     }
 
     @Override
-    public String executePollScript(String script, List<String> keys, List<Object> valueList) {
-        return redisTemplate.execute(new DefaultRedisScript<>(script, String.class),
-                new GenericToStringSerializer<>(Long.class),
-                new StringRedisSerializer(),
-                keys,
-                valueList.toArray());
-    }
-
-    @Override
-    public List<String> executeBatchPollScript(String script, List<String> keys, List<Object> valueList) {
+    public List<String> executePollScript(String script, List<String> keys, List<Object> valueList) {
         return redisTemplate.execute(new DefaultRedisScript<>(script, List.class),
+                new GenericToStringSerializer<>(Long.class),
+                new GenericToStringSerializer<>(List.class),
                 keys,
                 valueList.toArray());
     }

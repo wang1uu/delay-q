@@ -20,7 +20,7 @@ import java.util.concurrent.locks.LockSupport;
  * @author wang1
  * @param <T> 消息数据类型
  */
-public class DelayQueue<T> {
+public class RedisDelayQueue<T> {
     /**
      * Redis客户端
      */
@@ -43,19 +43,13 @@ public class DelayQueue<T> {
     private final String expiryList;
 
     /**
-     * 每批处理的到期元素的预估时间
-     */
-    @Getter
-    private final long batchProcessConst;
-
-    /**
      * 每批处理的到期元素个数
      */
     @Getter
     private final long batchSize;
 
     /**
-     * 处理超时时间
+     * 最大处理时间(ms)
      */
     @Getter
     private final long maxProcessTime;
@@ -78,16 +72,14 @@ public class DelayQueue<T> {
     private final ConcurrentMap<String, Consumer> consumers = new ConcurrentHashMap<>();
 
 
-    private DelayQueue(RedisClient<T> redisClient,
-                       String name,
-                       long batchProcessConst,
-                       long batchSize,
-                       long maxProcessTime) {
+    public RedisDelayQueue(RedisClient<T> redisClient,
+                           String name,
+                           long maxProcessTime,
+                           long batchSize) {
         this.redisClient = redisClient;
         this.name = name;
         this.delayZSet = name  + DelayQueueConstants.DELAY_ZSET_SUFFIX;
         this.expiryList = name + DelayQueueConstants.EXPIRED_LIST_SUFFIX;
-        this.batchProcessConst = batchProcessConst;
         this.batchSize = batchSize;
         this.maxProcessTime = maxProcessTime;
         this.transferThread = new AtomicReference<>(createTransferThread());
@@ -119,7 +111,7 @@ public class DelayQueue<T> {
                 long timeout = redisClient.executeTransferScript(DelayQueueConstants.TRANSFER_SCRIPT,
                         Arrays.asList(delayZSet, expiryList),
                         Arrays.asList(Clocks.INSTANCE.currentTimeMillis(),
-                        batchProcessConst,
+                        maxProcessTime,
                         batchSize));
                 Logs.info("transfer script running finish at " + (scriptFinish = Clocks.INSTANCE.currentTimeMillis()) + " cost [" + (scriptFinish - start) + "ms] " + " timeout => " + timeout);
 
@@ -165,14 +157,14 @@ public class DelayQueue<T> {
      * 填充生产者名称
      */
     public String popularProducerName(String name) {
-        return DelayQueue.this.name + DelayQueueConstants.MARK_SEPARATOR + name + DelayQueueConstants.PRODUCER_SUFFIX;
+        return RedisDelayQueue.this.name + DelayQueueConstants.MARK_SEPARATOR + name + DelayQueueConstants.PRODUCER_SUFFIX;
     }
 
     /**
      * 填充消费者名称
      */
     public String popularConsumerName(String name) {
-        return DelayQueue.this.name + DelayQueueConstants.MARK_SEPARATOR + name + DelayQueueConstants.CONSUMER_SUFFIX;
+        return RedisDelayQueue.this.name + DelayQueueConstants.MARK_SEPARATOR + name + DelayQueueConstants.CONSUMER_SUFFIX;
     }
 
     /**
@@ -195,7 +187,7 @@ public class DelayQueue<T> {
     /**
      * 获取消费者
      * @param name 消费者名称
-     * @param autoCommitInterval <=0: 关闭自动提交位移 >0: 自动提交消费位移的时间间隔
+     * @param autoCommitInterval(s) <=0: 关闭自动提交位移 >0: 自动提交消费位移的时间间隔
      * @author wang1
      */
     public Consumer consumer(String name, long autoCommitInterval) {
@@ -232,14 +224,14 @@ public class DelayQueue<T> {
         private final String name;
 
         @Getter
-        private final DelayQueue<T> delayQueue;
+        private final RedisDelayQueue<T> redisDelayQueue;
 
         private final RedisClient<T> redisClient;
 
-        private Producer(String name, RedisClient<T> redisClient, DelayQueue<T> delayQueue) {
+        private Producer(String name, RedisClient<T> redisClient, RedisDelayQueue<T> redisDelayQueue) {
             this.name = name;
             this.redisClient = redisClient;
-            this.delayQueue = delayQueue;
+            this.redisDelayQueue = redisDelayQueue;
         }
 
         /**
@@ -323,7 +315,7 @@ public class DelayQueue<T> {
         private final String cachedList;
 
         @Getter
-        private final DelayQueue<T> delayQueue;
+        private final RedisDelayQueue<T> redisDelayQueue;
 
         private final RedisClient<T> redisClient;
 
@@ -347,9 +339,9 @@ public class DelayQueue<T> {
          */
         private final AtomicReference<Thread> currentThread = new AtomicReference<>(null);
 
-        private Consumer(String name, RedisClient<T> redisClient, DelayQueue<T> delayQueue, boolean autoCommit, long autoCommitInterval) {
+        private Consumer(String name, RedisClient<T> redisClient, RedisDelayQueue<T> redisDelayQueue, boolean autoCommit, long autoCommitInterval) {
             this.name = name;
-            this.delayQueue = delayQueue;
+            this.redisDelayQueue = redisDelayQueue;
             this.redisClient = redisClient;
             this.autoCommit = autoCommit;
             this.autoCommitInterval = autoCommitInterval;
@@ -375,24 +367,37 @@ public class DelayQueue<T> {
             }
         }
 
-        public T poll(long timeout, TimeUnit unit) {
+        public List<T> poll(long batchSize, long timeout, TimeUnit unit) {
             lock();
-
             autoCommit();
-            T item = redisClient.executePollScript(DelayQueueConstants.POLL_SCRIPT, Arrays.asList(expiryList, cachedList), Collections.singletonList(unit.toSeconds(timeout)));
+
+            long current = Clocks.INSTANCE.currentTimeMillis();
+            long deadline = unit.toMillis(timeout) + current;
+
+            ArrayList<T> result = new ArrayList<>();
+
+            while (Clocks.INSTANCE.currentTimeMillis() < deadline && result.size() < batchSize) {
+                List<T> dataList = redisClient.executePollScript(DelayQueueConstants.POLL_SCRIPT,
+                        Arrays.asList(expiryList, cachedList),
+                        Collections.singletonList(batchSize - result.size()));
+
+                result.addAll(dataList);
+                if (result.size() >= batchSize) { // 理论上这里是不会出现大于的情况的
+                    break;
+                }
+
+                // 阻塞等待
+                long waitTime = deadline - Clocks.INSTANCE.currentTimeMillis();
+                if (waitTime > 0) {
+                    T data = redisClient.bLMove(expiryList, cachedList, waitTime, TimeUnit.MILLISECONDS);
+                    if (data != null) {
+                        result.add(data);
+                    }
+                }
+            }
 
             release();
-            return item;
-        }
-
-        public List<T> poll(long timeout, TimeUnit unit, long batchSize) {
-            lock();
-
-            autoCommit();
-            List<T> itemList = redisClient.executeBatchPollScript(DelayQueueConstants.BATCH_POLL_SCRIPT, Arrays.asList(expiryList, cachedList), Arrays.asList(unit.toSeconds(timeout), batchSize));
-
-            release();
-            return itemList;
+            return result;
         }
 
         public long getUnCommitedSize() {

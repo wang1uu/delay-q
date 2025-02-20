@@ -1,6 +1,7 @@
 package cc.wang1.component.redis;
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Redis 客户端
@@ -31,6 +32,7 @@ public interface RedisClient<T> {
     long lLen(String list);
     List<T> lRange(String list, long start, long end);
     long lTrim(String list, long start, long end);
+    T bLMove(String source, String destination, long timeout, TimeUnit unit);
 
     /**
      * 到期消息转移脚本
@@ -47,6 +49,5 @@ public interface RedisClient<T> {
     /**
      * 消费
      */
-    T executePollScript(String script, List<String> keys, List<Object> valueList);
-    List<T> executeBatchPollScript(String script, List<String> keys, List<Object> valueList);
+    List<T> executePollScript(String script, List<String> keys, List<Object> valueList);
 }

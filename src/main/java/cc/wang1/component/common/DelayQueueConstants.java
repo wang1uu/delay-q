@@ -44,10 +44,12 @@ public final class DelayQueueConstants {
                     "local zset_key = KEYS[1] " +
                     "local list_key = KEYS[2] " +
                     "local T = tonumber(ARGV[1]) " +
-                    "local increment = tonumber(ARGV[2]) " +
-                    "local limit = T + 1000 " +
+                    "local max_duration = tonumber(ARGV[2]) " +
                     "local batch_size = tonumber(ARGV[3]) " +
-                    "while T < limit do " +
+                    "local start_time = redis.call('TIME') " +
+                    "local start_timestamp = tonumber(start_time[1]) " +
+                    "local current_timestamp = tonumber(start_time[1]) " +
+                    "while current_timestamp < start_timestamp + max_duration do " +
                     "    local elements = redis.call('ZRANGE', zset_key, '-inf', T, 'BYSCORE', 'WITHSCORES', 'LIMIT', 0, batch_size) " +
                     "    if #elements <= 0 then break end " +
                     "    local to_remove = {} " +
@@ -58,8 +60,8 @@ public final class DelayQueueConstants {
                     "        redis.call('ZREM', zset_key, unpack(to_remove)) " +
                     "        redis.call('RPUSH', list_key, unpack(to_remove)) " +
                     "    end " +
-                    "    T = T + increment " +
-                    "    if T >= limit then break end " +
+                    "    local current_time = redis.call('TIME') " +
+                    "    local current_timestamp = tonumber(current_time[1]) " +
                     "end " +
                     "local first_element = redis.call('ZRANGE', zset_key, 0, 0, 'WITHSCORES') " +
                     "if #first_element > 0 then " +
@@ -105,42 +107,14 @@ public final class DelayQueueConstants {
     public static final String POLL_SCRIPT =
                     "local expired_list = KEYS[1] " +
                     "local cached_list = KEYS[2] " +
-                    "local timeout = tonumber(ARGV[1]) " +
-                    "local result = redis.call('BLPOP', expired_list, timeout) " +
-                    "if result then " +
-                    "    local element = result[2] " +
-                    "    redis.call('RPUSH', cached_list, element) " +
-                    "    return element " +
+                    "local batch_size = tonumber(ARGV[1]) " +
+                    "local elements = redis.call('LPOP', expired_list, batch_size) " +
+                    "if type(elements) == 'table' then " +
+                    "    redis.call('RPUSH', cached_list, unpack(elements)) " +
+                    "    return elements " +
+                    "elseif elements then " +
+                    "    redis.call('RPUSH', cached_list, elements) " +
+                    "    return {elements} " +
                     "end " +
-                    "return nil ";
-
-    /**
-     * 批量拉取消息 lua脚本
-     */
-    public static final String BATCH_POLL_SCRIPT =
-                    "local expired_list = KEYS[1] " +
-                    "local cached_list = KEYS[2] " +
-                    "local script_timeout = tonumber(ARGV[1]) " +
-                    "local max_elements = tonumber(ARGV[2]) " +
-                    "local elements = {} " +
-                    "local i = 0 " +
-                    "local start_time = redis.call('TIME')[1] " +
-                    "while i < max_elements do " +
-                    "    local current_time = redis.call('TIME')[1] " +
-                    "    local elapsed_time = current_time - start_time " +
-                    "    local remaining_time = script_timeout - elapsed_time " +
-                    "    if remaining_time <= 0 then " +
-                    "        break " +
-                    "    end " +
-                    "    local result = redis.call('BLPOP', expired_list, remaining_time) " +
-                    "    if result then " +
-                    "        local element = result[2] " +
-                    "        redis.call('RPUSH', cached_list, element) " +
-                    "        table.insert(elements, element) " +
-                    "        i = i + 1 " +
-                    "    else " +
-                    "        break " +
-                    "    end " +
-                    "end " +
-                    "return elements";
+                    "return {} ";
 }
