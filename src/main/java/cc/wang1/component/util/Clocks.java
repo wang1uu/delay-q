@@ -48,4 +48,8 @@ public enum Clocks {
     public long currentTimeMillis() {
         return currentMillis.get();
     }
+
+    public long currentTimeMillis(long offset) {
+        return currentMillis.get() + offset;
+    }
 }

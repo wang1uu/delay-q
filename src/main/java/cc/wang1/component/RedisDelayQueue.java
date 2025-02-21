@@ -187,10 +187,9 @@ public class RedisDelayQueue<T> {
     /**
      * 获取消费者
      * @param name 消费者名称
-     * @param autoCommitInterval(s) <=0: 关闭自动提交位移 >0: 自动提交消费位移的时间间隔
      * @author wang1
      */
-    public Consumer consumer(String name, long autoCommitInterval) {
+    public Consumer consumer(String name) {
         if (!StringUtils.hasText(name)) {
             throw new IllegalArgumentException("consumer name is empty.");
         }
@@ -199,9 +198,7 @@ public class RedisDelayQueue<T> {
 
         Consumer consumer = consumers.getOrDefault(consumerName, new Consumer(name,
                 redisClient,
-                this,
-                autoCommitInterval > 0,
-                autoCommitInterval > 0 ? TimeUnit.SECONDS.toMillis(autoCommitInterval) : 0));
+                this));
         consumers.putIfAbsent(consumerName, consumer);
         return consumer;
     }
@@ -326,33 +323,37 @@ public class RedisDelayQueue<T> {
         private long lastCommitedTime;
 
         @Getter
-        private final boolean autoCommit;
+        private boolean autoCommit;
 
         /**
          * 自动提交位移时间间隔（ms）
          */
         @Getter
-        private final long autoCommitInterval;
+        private long autoCommitInterval;
 
         /**
          * 防止并发操作
          */
         private final AtomicReference<Thread> currentThread = new AtomicReference<>(null);
 
-        private Consumer(String name, RedisClient<T> redisClient, RedisDelayQueue<T> redisDelayQueue, boolean autoCommit, long autoCommitInterval) {
+        private Consumer(String name, RedisClient<T> redisClient, RedisDelayQueue<T> redisDelayQueue) {
             this.name = name;
             this.redisDelayQueue = redisDelayQueue;
             this.redisClient = redisClient;
-            this.autoCommit = autoCommit;
-            this.autoCommitInterval = autoCommitInterval;
+            this.autoCommit = true;
+            this.autoCommitInterval = TimeUnit.SECONDS.toMillis(10);
             this.cachedList = popularConsumerName(name) + DelayQueueConstants.CACHED_LIST_SUFFIX;
         }
 
-        private void autoCommit() {
-            if (autoCommit && Clocks.INSTANCE.currentTimeMillis() > lastCommitedTime + autoCommitInterval) {
-                redisClient.del(cachedList);
-                lastCommitedTime = Clocks.INSTANCE.currentTimeMillis();
-            }
+        /**
+         * 设置是否自动提交位移
+         * @param autoCommitInterval <=0: 关闭自动提交位移 >0: 自动提交消费位移的时间间隔ms
+         * @author wang1
+         */
+        public Consumer autoCommit(long autoCommitInterval, TimeUnit unit) {
+            this.autoCommit = autoCommitInterval > 0;
+            this.autoCommitInterval = unit.toMillis(autoCommitInterval);
+            return this;
         }
 
         private void lock() {
@@ -369,7 +370,12 @@ public class RedisDelayQueue<T> {
 
         public List<T> poll(long batchSize, long timeout, TimeUnit unit) {
             lock();
-            autoCommit();
+
+            // 自动提交位移
+            if (autoCommit && Clocks.INSTANCE.currentTimeMillis() > lastCommitedTime + autoCommitInterval) {
+                redisClient.del(cachedList);
+                lastCommitedTime = Clocks.INSTANCE.currentTimeMillis();
+            }
 
             long current = Clocks.INSTANCE.currentTimeMillis();
             long deadline = unit.toMillis(timeout) + current;
