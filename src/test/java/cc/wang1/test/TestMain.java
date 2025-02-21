@@ -12,6 +12,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
@@ -88,7 +89,6 @@ public class TestMain {
         Executors.newSingleThreadExecutor().execute(() -> {
             while (true) {
                 List<String> data = c1.poll(10, 2, TimeUnit.SECONDS);
-                System.out.println(1);
                 data.forEach(s -> {
                     long currentTimeMillis = Clocks.INSTANCE.currentTimeMillis();
                     if (currentTimeMillis - Long.parseLong(s) > 5000) {
@@ -98,13 +98,13 @@ public class TestMain {
             }
         });
 
-//        Executors.newSingleThreadExecutor().execute(() -> {
-//            while (true) {
-//                LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(100));
-//                long expiry = Clocks.INSTANCE.currentTimeMillis(TimeUnit.SECONDS.toMillis(ThreadLocalRandom.current().nextInt(60)));
-//                p1.offer(expiry, String.valueOf(expiry));
-//            }
-//        });
+        Executors.newSingleThreadExecutor().execute(() -> {
+            while (true) {
+                LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(100));
+                long expiry = Clocks.INSTANCE.currentTimeMillis(TimeUnit.SECONDS.toMillis(ThreadLocalRandom.current().nextInt(60)));
+                p1.offer(expiry, String.valueOf(expiry));
+            }
+        });
 
         LockSupport.park();
     }
