@@ -72,6 +72,14 @@ public class RedisDelayQueue<T> {
     private final ConcurrentMap<String, Consumer> consumers = new ConcurrentHashMap<>();
 
 
+    /**
+     * 延迟队列
+     * @param name 队列名称
+     * @param redisClient redis客户端
+     * @param maxProcessTime 处理脚本执行时长限制
+     * @param batchSize 脚本每批次处理数量
+     * @author wang1
+     */
     public RedisDelayQueue(RedisClient<T> redisClient,
                            String name,
                            long maxProcessTime,
@@ -377,18 +385,17 @@ public class RedisDelayQueue<T> {
                 lastCommitedTime = Clocks.INSTANCE.currentTimeMillis();
             }
 
-            long current = Clocks.INSTANCE.currentTimeMillis();
-            long deadline = unit.toMillis(timeout) + current;
+            long deadline = Clocks.INSTANCE.currentTimeMillis(unit.toMillis(timeout));
 
             ArrayList<T> result = new ArrayList<>();
 
-            while (Clocks.INSTANCE.currentTimeMillis() < deadline && result.size() < batchSize) {
+            while (true) {
                 List<T> dataList = redisClient.executePollScript(DelayQueueConstants.POLL_SCRIPT,
                         Arrays.asList(expiryList, cachedList),
-                        Collections.singletonList(batchSize - result.size()));
-
+                        batchSize - result.size());
                 result.addAll(dataList);
-                if (result.size() >= batchSize) { // 理论上这里是不会出现大于的情况的
+
+                if (result.size() >= batchSize || Clocks.INSTANCE.currentTimeMillis() >= deadline) {
                     break;
                 }
 

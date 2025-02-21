@@ -114,11 +114,11 @@ public class SpringStringRedisClientAdapter implements RedisClient<String> {
     }
 
     @Override
-    public List<String> executePollScript(String script, List<String> keys, List<Object> valueList) {
-        return redisTemplate.execute(new DefaultRedisScript<>(script, List.class),
-                new GenericToStringSerializer<>(Long.class),
-                new GenericToStringSerializer<>(List.class),
-                keys,
-                valueList.toArray());
+    public List<String> executePollScript(String script, List<String> keys, long args) {
+        DefaultRedisScript<List<String>> redisScript = new DefaultRedisScript<>();
+        redisScript.setScriptText(script);
+        redisScript.setResultType((Class<List<String>>) ((Class<?>)List.class));
+
+        return redisTemplate.execute(redisScript, keys, String.valueOf(args));
     }
 }
